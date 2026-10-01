@@ -4,6 +4,7 @@ mod config;
 mod daemon;
 mod device;
 mod drm;
+mod icc;
 mod schedule;
 mod temperature;
 mod vt;
@@ -26,6 +27,7 @@ const DEFAULT_DAEMON_CONFIG: &str = "/etc/default/drm-gamma.conf";
     Examples:\n  drm-gamma -t 6500           # Set temperature to 6500K\n  \
     drm-gamma -t 3500 -b 0.8    # Warm temperature, 80% brightness\n  \
     drm-gamma -rgamma 0.8 -ggamma 0.8 -bgamma 0.9  # Per-channel gamma\n  \
+    drm-gamma --icc cal.icc -rgamma 0.8 -ggamma 0.8 -bgamma 0.9  # ICC profile (KDE/GNOME)\n  \
     drm-gamma -l                # List available displays\n  \
     drm-gamma -r                # Reset to defaults\n  \
     drm-gamma --daemon -c /etc/default/drm-gamma.conf"
@@ -50,6 +52,11 @@ struct Args {
     /// Blue gamma (0.1-10; also accepts -bgamma)
     #[arg(long)]
     bgamma: Option<f64>,
+
+    /// Write an sRGB ICC profile with these settings (vcgt) instead of touching
+    /// DRM. Load it in your compositor (e.g. KDE: kscreen-doctor ...iccprofile)
+    #[arg(long, value_name = "PATH")]
+    icc: Option<String>,
 
     /// DRM device path
     #[arg(short = 'd', long, default_value = DEFAULT_DEVICE)]
@@ -110,7 +117,10 @@ fn main() -> ExitCode {
     }
 
     let gamma = [args.rgamma, args.ggamma, args.bgamma];
-    if args.temperature.is_some() || args.brightness.is_some() || gamma.iter().any(Option::is_some)
+    if args.temperature.is_some()
+        || args.brightness.is_some()
+        || gamma.iter().any(Option::is_some)
+        || args.icc.is_some()
     {
         let temp = args.temperature.unwrap_or(6500);
         if !(1000..=10000).contains(&temp) {
@@ -126,6 +136,19 @@ fn main() -> ExitCode {
         if !gamma.iter().all(|g| config::GAMMA_RANGE.contains(g)) {
             eprintln!("Gamma must be between 0.1 and 10");
             return ExitCode::from(1);
+        }
+        if let Some(path) = &args.icc {
+            let (r, g, b) = temperature::generate_gamma_luts(256, temp, brightness, gamma);
+            return match std::fs::write(path, icc::build_profile(&r, &g, &b)) {
+                Ok(()) => {
+                    info!("Wrote ICC profile {path}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Error writing {path}: {e}");
+                    ExitCode::from(1)
+                }
+            };
         }
         return apply_temperature_cli(temp, brightness, gamma, &args.device);
     }

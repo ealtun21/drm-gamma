@@ -35,9 +35,10 @@ compositor reset, one quick TTY round-trip restores the calibration:
 | F4 (`WARM_TTY`) | Force `NIGHT_TEMP` + gamma |
 | F5 (`COOL_TTY`) | Force `DAY_TEMP` + gamma |
 
-> If your compositor resets gamma on its own (e.g. its built-in night light,
-> or after a monitor hotplug/DPMS wake), turn that feature off or redo the TTY
-> round-trip.
+> **KDE Plasma and GNOME reset the gamma table** when you switch back, so the
+> TTY trick doesn't stick there. Use an [ICC profile](#icc-profile-kde-gnome)
+> instead. Other compositors may also reset it on hotplug/DPMS wake; redo the
+> TTY round-trip then.
 
 ## Install
 
@@ -82,6 +83,30 @@ GGAMMA=0.80
 BGAMMA=0.90
 ```
 
+### ICC profile (KDE, GNOME)
+
+Compositors that manage colour themselves overwrite the DRM gamma table, but
+they do apply an ICC profile's `vcgt` calibration curve, and they keep it
+across reboots. `--icc` writes an sRGB profile carrying the same curves
+(gamma, plus `-t`/`-b` if given). It needs no root and doesn't touch DRM:
+
+```bash
+drm-gamma --icc ~/.local/share/icc/drm-gamma.icc -rgamma 0.80 -ggamma 0.80 -bgamma 0.90
+```
+
+- **KDE Plasma 6:** System Settings → Display & Monitor → Color profile → ICC
+  profile, or:
+  ```bash
+  kscreen-doctor output.eDP-1.iccprofile.$HOME/.local/share/icc/drm-gamma.icc \
+                 output.eDP-1.colorProfileSource.ICC
+  # revert: kscreen-doctor output.eDP-1.colorProfileSource.sRGB
+  ```
+  (`kscreen-doctor -o` lists output names.)
+- **GNOME:** Settings → Color → your display → Add profile → import the file.
+
+Rerun with new values and reselect the profile to tweak. The daemon isn't needed in
+this mode; `sudo systemctl disable --now drm-gamma`.
+
 ### CLI
 
 | Flag | Description |
@@ -89,6 +114,7 @@ BGAMMA=0.90
 | `-rgamma`, `-ggamma`, `-bgamma` (or `--rgamma` …) | Per-channel gamma, 0.1–10 |
 | `-t, --temperature K` | Color temperature, 1000–10000 (default 6500) |
 | `-b, --brightness X` | Brightness multiplier, 0.1–1.0 |
+| `--icc PATH` | Write an ICC profile with these settings instead of applying via DRM |
 | `-d, --device PATH` | DRM device (default `/dev/dri/card1`, auto-falls back) |
 | `-r, --reset` | Reset to 6500K, brightness 1, gamma 1 |
 | `-l, --list` | List DRM devices, CRTCs, connectors |

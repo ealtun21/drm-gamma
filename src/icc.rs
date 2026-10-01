@@ -59,21 +59,22 @@ pub fn build_profile(red: &[u16], green: &[u16], blue: &[u16], saturation: f64) 
         vcgt.extend(v.to_be_bytes());
     }
 
-    // New table is one entry longer: shift every existing offset by 12.
-    let mut out = SRGB[..128].to_vec();
-    out.extend((count as u32 + 1).to_be_bytes());
+    // Swap `chrm` for `vcgt`: same table size, so data offsets stay valid.
+    // KWin takes primaries from `chrm` over rXYZ/gXYZ/bXYZ, and it's optional.
+    let mut out = SRGB[..132].to_vec();
     for i in 0..count {
         let e = 132 + 12 * i;
-        out.extend(&SRGB[e..e + 4]);
-        out.extend((be32(SRGB, e + 4) + 12).to_be_bytes());
-        out.extend(&SRGB[e + 8..e + 12]);
+        if &SRGB[e..e + 4] != b"chrm" {
+            out.extend(&SRGB[e..e + 12]);
+        }
     }
+    assert_eq!(out.len(), data_start - 12, "srgb.icc has a chrm tag");
     let mut data = SRGB[data_start..].to_vec();
     if saturation != 1.0 {
         scale_primaries(&mut data, data_start, saturation);
     }
     data.resize((data.len() + 3) & !3, 0);
-    let vcgt_off = data_start + 12 + data.len();
+    let vcgt_off = data_start + data.len();
     out.extend(b"vcgt");
     out.extend((vcgt_off as u32).to_be_bytes());
     out.extend((vcgt.len() as u32).to_be_bytes());
@@ -97,18 +98,20 @@ mod tests {
         assert_eq!(be32(&p, 0) as usize, p.len());
         assert_eq!(&p[36..40], b"acsp");
         let n = be32(&p, 128) as usize;
-        assert_eq!(n, be32(SRGB, 128) as usize + 1);
-        for i in 0..n {
+        assert_eq!(n, be32(SRGB, 128) as usize);
+        let sigs: Vec<_> = (0..n).map(|i| &p[132 + 12 * i..136 + 12 * i]).collect();
+        assert!(!sigs.contains(&&b"chrm"[..]));
+        assert_eq!(sigs[n - 1], b"vcgt");
+        for (i, sig) in sigs.iter().enumerate() {
             let e = 132 + 12 * i;
             let (off, size) = (be32(&p, e + 4) as usize, be32(&p, e + 8) as usize);
             assert!(off % 4 == 0 && off + size <= p.len());
-            let expect = if i + 1 < n {
-                let o = be32(SRGB, e + 4) as usize; // original entry i
-                &SRGB[o..o + 4]
+            // Tag data starts with its type; for XYZ/vcgt that's distinct per sig.
+            if sig == b"vcgt" {
+                assert_eq!(&p[off..off + 4], b"vcgt");
             } else {
-                &b"vcgt"[..]
-            };
-            assert_eq!(&p[off..off + 4], expect);
+                assert_eq!(&p[off..off + 4], &SRGB[off..off + 4]);
+            }
         }
         let vcgt = be32(&p, 132 + 12 * (n - 1) + 4) as usize;
         assert_eq!(

@@ -27,7 +27,7 @@ const DEFAULT_DAEMON_CONFIG: &str = "/etc/default/drm-gamma.conf";
     Examples:\n  drm-gamma -t 6500           # Set temperature to 6500K\n  \
     drm-gamma -t 3500 -b 0.8    # Warm temperature, 80% brightness\n  \
     drm-gamma -rgamma 0.8 -ggamma 0.8 -bgamma 0.9  # Per-channel gamma\n  \
-    drm-gamma --icc cal.icc -rgamma 0.8 -ggamma 0.8 -bgamma 0.9  # ICC profile (KDE/GNOME)\n  \
+    drm-gamma --icc ~/.local/share/icc -rgamma 0.8 -ggamma 0.8 -bgamma 0.9  # ICC profile (KDE/GNOME)\n  \
     drm-gamma -l                # List available displays\n  \
     drm-gamma -r                # Reset to defaults\n  \
     drm-gamma --daemon -c /etc/default/drm-gamma.conf"
@@ -54,8 +54,9 @@ struct Args {
     bgamma: Option<f64>,
 
     /// Write an sRGB ICC profile with these settings (vcgt) instead of touching
-    /// DRM. Load it in your compositor (e.g. KDE: kscreen-doctor ...iccprofile)
-    #[arg(long, value_name = "PATH")]
+    /// DRM. If DIR is a directory, the file is named after the settings and its
+    /// path printed. Load it in your compositor (KDE: kscreen-doctor)
+    #[arg(long, value_name = "DIR|FILE")]
     icc: Option<String>,
 
     /// DRM device path
@@ -138,10 +139,21 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
         if let Some(path) = &args.icc {
+            // KWin caches profiles by path: name each setting uniquely so a
+            // new value is a new path. An explicit file path is used as-is.
+            let mut path = std::path::PathBuf::from(path);
+            if path.is_dir() {
+                path.push(format!(
+                    "drm-gamma-t{temp}-br{brightness:.2}-r{:.2}-g{:.2}-b{:.2}.icc",
+                    gamma[0], gamma[1], gamma[2]
+                ));
+            }
+            let path = path.display();
             let (r, g, b) = temperature::generate_gamma_luts(256, temp, brightness, gamma);
-            return match std::fs::write(path, icc::build_profile(&r, &g, &b)) {
+            return match std::fs::write(path.to_string(), icc::build_profile(&r, &g, &b)) {
                 Ok(()) => {
-                    info!("Wrote ICC profile {path}");
+                    // stdout = path only, for $(drm-gamma --icc DIR ...)
+                    println!("{path}");
                     ExitCode::SUCCESS
                 }
                 Err(e) => {

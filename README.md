@@ -88,24 +88,31 @@ BGAMMA=0.90
 Compositors that manage colour themselves overwrite the DRM gamma table, but
 they do apply an ICC profile's `vcgt` calibration curve, and they keep it
 across reboots. `--icc` writes an sRGB profile carrying the same curves
-(gamma, plus `-t`/`-b` if given). It needs no root and doesn't touch DRM:
+(gamma, plus `-t`/`-b` if given). It needs no root and doesn't touch DRM.
+Given a directory, it names the file after the settings (e.g.
+`drm-gamma-t6500-br1.00-r0.80-g0.80-b0.90.icc`) and prints the path:
 
 ```bash
-drm-gamma --icc ~/.local/share/icc/drm-gamma.icc -rgamma 0.80 -ggamma 0.80 -bgamma 0.90
+mkdir -p ~/.local/share/icc
+drm-gamma --icc ~/.local/share/icc -rgamma 0.80 -ggamma 0.80 -bgamma 0.90
 ```
 
-- **KDE Plasma 6:** System Settings → Display & Monitor → Color profile → ICC
-  profile, or:
+- **KDE Plasma 6:** one line, works in bash and fish (`kscreen-doctor -o`
+  lists output names):
   ```bash
-  kscreen-doctor output.eDP-1.iccprofile.$HOME/.local/share/icc/drm-gamma.icc \
-                 output.eDP-1.colorProfileSource.ICC
+  kscreen-doctor output.eDP-1.colorProfileSource.ICC \
+    output.eDP-1.iccprofile.(drm-gamma --icc ~/.local/share/icc -rgamma 0.80 -ggamma 0.80 -bgamma 0.90)
+  # bash: use $(...) instead of (...)
   # revert: kscreen-doctor output.eDP-1.colorProfileSource.sRGB
   ```
-  (`kscreen-doctor -o` lists output names.)
+  Or System Settings → Display & Monitor → Color profile → ICC profile.
 - **GNOME:** Settings → Color → your display → Add profile → import the file.
 
-Rerun with new values and reselect the profile to tweak. The daemon isn't needed in
-this mode; `sudo systemctl disable --now drm-gamma`.
+> KWin caches profiles **by path**. Rewriting the same file and reselecting it
+> does nothing. That's why directory mode gives every setting its own
+> filename. If you pass an explicit file path, use a new name each time.
+
+The daemon isn't needed in this mode: `sudo systemctl disable --now drm-gamma`.
 
 ### CLI
 
@@ -114,7 +121,7 @@ this mode; `sudo systemctl disable --now drm-gamma`.
 | `-rgamma`, `-ggamma`, `-bgamma` (or `--rgamma` …) | Per-channel gamma, 0.1–10 |
 | `-t, --temperature K` | Color temperature, 1000–10000 (default 6500) |
 | `-b, --brightness X` | Brightness multiplier, 0.1–1.0 |
-| `--icc PATH` | Write an ICC profile with these settings instead of applying via DRM |
+| `--icc DIR\|FILE` | Write an ICC profile instead of applying via DRM; a directory auto-names the file and prints its path |
 | `-d, --device PATH` | DRM device (default `/dev/dri/card1`, auto-falls back) |
 | `-r, --reset` | Reset to 6500K, brightness 1, gamma 1 |
 | `-l, --list` | List DRM devices, CRTCs, connectors |

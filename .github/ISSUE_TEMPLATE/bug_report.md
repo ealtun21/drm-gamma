@@ -10,7 +10,7 @@ labels: bug
 
 ## System Information
 - **OS**: <!-- e.g., Pop!_OS 22.04 -->
-- **COSMIC Version**: <!-- e.g., alpha 2 -->
+- **Desktop / compositor**: <!-- e.g., KDE Wayland, i3 on Xorg, COSMIC -->
 - **Kernel Version**: <!-- uname -r -->
 - **DRM Device**: <!-- /dev/dri/card0 or card1? -->
 
@@ -27,7 +27,7 @@ labels: bug
 
 ## Logs
 ```
-# Output of: sudo journalctl -u drm-colortemp-daemon -n 50
+# Output of: sudo journalctl -u drm-gamma-daemon -n 50
 paste here
 ```
 

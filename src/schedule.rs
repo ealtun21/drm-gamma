@@ -1,6 +1,6 @@
 //! Time-of-day → temperature mapping.
 //!
-//! Wraps the C version's behaviour: if the current local hour is in
+//! If the current local hour is in
 //! `[sunset_hour, 24) ∪ [0, sunrise_hour)`, use the night temperature;
 //! otherwise the day temperature. Handles the wrap when sunrise > sunset.
 
@@ -9,7 +9,13 @@ use chrono::{Local, Timelike};
 
 pub fn current_temperature(config: &Config) -> u32 {
     let hour = Local::now().hour() as u8;
-    hour_temperature(hour, config.sunset_hour, config.sunrise_hour, config.day_temp, config.night_temp)
+    hour_temperature(
+        hour,
+        config.sunset_hour,
+        config.sunrise_hour,
+        config.day_temp,
+        config.night_temp,
+    )
 }
 
 fn hour_temperature(hour: u8, sunset: u8, sunrise: u8, day: u32, night: u32) -> u32 {

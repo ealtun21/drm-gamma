@@ -1,5 +1,5 @@
 [package]
-name = "drm-colortemp-rs"
+name = "drm-gamma"
 version = "2.1.0"
 edition = "2021"
 rust-version = "1.70"

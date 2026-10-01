@@ -1,6 +1,6 @@
 //! Low-level DRM FFI: ioctls for CRTC enumeration, gamma set, connector lookup.
 //!
-//! Mirrors the C code's direct ioctl path (no libdrm dependency).
+//! Direct DRM ioctls (no libdrm dependency).
 
 use nix::{ioctl_none, ioctl_readwrite};
 use std::os::unix::io::RawFd;

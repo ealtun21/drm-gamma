@@ -20,6 +20,3 @@ labels: enhancement
 ## Additional Context
 <!-- Any other relevant information -->
 
-## Note
-This is a workaround tool. Consider if this feature should be in COSMIC itself:
-https://github.com/pop-os/cosmic-comp/issues/2059

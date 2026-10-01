@@ -1,334 +1,129 @@
-# DRM Color Temperature Control for COSMIC DE
+# drm-gamma
 
-[![Build](https://github.com/jjo/drm-colortemp/actions/workflows/build.yml/badge.svg)](https://github.com/jjo/drm-colortemp/actions)
+[![Build](https://github.com/ealtun21/drm-gamma/actions/workflows/build.yml/badge.svg)](https://github.com/ealtun21/drm-gamma/actions)
 
-A workaround for adjusting screen color temperature on COSMIC Desktop Environment (Pop!_OS), until native gamma control is implemented ([cosmic-comp#2059](https://github.com/pop-os/cosmic-comp/issues/2059)).
-
-## The Problem
-
-COSMIC DE doesn't implement `wlr-gamma-control-unstable-v1` protocol yet, so tools like `redshift`, `wlsunset`, and `gammastep` don't work.
-
-## The Solution
-
-This package provides:
-- **Direct DRM manipulation** tool to set color temperature
-- **Automatic daemon** that applies settings when you switch TTYs (auto, force warm, force cool)
-- **Config file** with live reload (changes apply instantly via inotify)
-- **Desktop notifications** to remind you when to apply (optional)
-
-### How It Works
-
-1. A daemon runs in the background monitoring TTY switches
-2. You press **Ctrl+Alt+F3** (switches to TTY3) for automatic time-based temperature
-3. Daemon detects the switch and applies gamma (COSMIC releases DRM lock on TTY switch)
-4. You immediately press **Ctrl+Alt+F2** (back to COSMIC)
-5. Total time: ~2 seconds, screen flickers briefly
-
-You can also **force** a specific temperature:
-- **Ctrl+Alt+F4** (TTY4) - Force warm/night temperature (e.g. 3500K)
-- **Ctrl+Alt+F5** (TTY5) - Force cool/day temperature (6500K)
-
-The gamma settings persist even after switching back to COSMIC!
-
-## Build Dependencies (Pop!_OS / Ubuntu)
+Persistent per-channel gamma calibration and color temperature for Linux,
+set directly on the GPU's DRM gamma tables. It works the same under Xorg and
+any Wayland compositor (COSMIC, KDE, GNOME, Sway, Hyprland, niri, …) because
+it never talks to the display server.
 
 ```bash
-sudo apt install build-essential libdrm-dev linux-libc-dev libnotify-bin
+sudo drm-gamma -rgamma 0.80 -ggamma 0.80 -bgamma 0.90
 ```
 
-- `build-essential` - gcc, make
-- `libdrm-dev` - DRM/KMS headers and library
-- `linux-libc-dev` - Linux kernel headers (ioctl definitions)
-- `libnotify-bin` - `notify-send` for desktop notifications (optional)
+Forked from [jjo/drm-colortemp](https://github.com/jjo/drm-colortemp) (a COSMIC
+night-light workaround). This fork adds per-channel gamma and drops the COSMIC
+applet and legacy C code.
 
-## Quick Start
+## How it works
+
+A running compositor holds *DRM master*, which stops other processes from
+writing the gamma tables. When you switch to a text console it lets go
+briefly, and drm-gamma writes the tables then. Most compositors don't rewrite
+them when you switch back, so the setting sticks.
+
+The daemon makes this persistent. It watches for TTY switches and
+**re-applies your gamma + temperature every time**, so after a reboot or a
+compositor reset, one quick TTY round-trip restores the calibration:
+
+1. Press **Ctrl+Alt+F3**. The daemon applies your settings.
+2. Press **Ctrl+Alt+F2** (or whichever VT your session is on) to go back.
+
+| TTY | Effect |
+|-----|--------|
+| F3 (`MONITOR_TTY`) | Time-based temperature (day/night) + gamma |
+| F4 (`WARM_TTY`) | Force `NIGHT_TEMP` + gamma |
+| F5 (`COOL_TTY`) | Force `DAY_TEMP` + gamma |
+
+> If your compositor resets gamma on its own (e.g. its built-in night light,
+> or after a monitor hotplug/DPMS wake), turn that feature off or redo the TTY
+> round-trip.
+
+## Install
+
+Requires Rust ≥ 1.70. No libdrm needed (raw ioctls).
 
 ```bash
-# Clone and build
-git clone https://github.com/jjo/drm-colortemp.git
-cd drm-colortemp
-make
-
-# Interactive installer (recommended)
-sudo ./scripts/install_daemon.sh
-
-# Or non-interactive
-sudo make install
-sudo make install-notifier  # Optional: desktop notifications
-sudo systemctl enable --now drm-colortemp-daemon
-sudo systemctl enable --now drm-colortemp-notifier  # Optional
-
-# Use it! Press Ctrl+Alt+F3, then immediately Ctrl+Alt+F2
+git clone https://github.com/ealtun21/drm-gamma.git
+cd drm-gamma
+sudo make install            # binary → /usr/local/bin, config → /etc/default/drm-gamma.conf
+sudo systemctl enable --now drm-gamma
 ```
 
-Pre-built binaries are also available on the [Releases page](https://github.com/jjo/drm-colortemp/releases).
+Optional: `sudo make install-notifier` for sunset/sunrise reminders (see
+[NOTIFICATIONS.md](NOTIFICATIONS.md)). `make deb VERSION=x.y.z` builds a
+Debian package. `sudo make uninstall` removes everything except your config.
 
-## Daily Usage
+## Calibrating gamma
 
-### With Notifications (Optional)
+Gamma follows the `xgamma` convention: `out = in^(1/γ)`.
 
-At 19:55 (if sunset is 20:00), you'll see:
-```
-🌙 Night Mode Ready
-Press Ctrl+Alt+F3 then F2 to apply warm 3500K
-```
+- `1.0` leaves the channel as it is
+- `< 1.0` darkens the midtones
+- `> 1.0` brightens the midtones
+- Black and white endpoints never move. Range is `0.1`–`10`.
 
-Press **Ctrl+Alt+F3** then **Ctrl+Alt+F2**. Done!
-
-### Without Notifications
-
-Just press **Ctrl+Alt+F3** then **Ctrl+Alt+F2** whenever you want to apply:
-- Evening (after 20:00): Warm 3500K applied
-- Morning (after 08:00): Neutral 6500K applied
-
-### Force Override
-
-Override time-based logic anytime:
-- **Ctrl+Alt+F4** then **Ctrl+Alt+F2** - Force warm (NIGHT_TEMP)
-- **Ctrl+Alt+F5** then **Ctrl+Alt+F2** - Force cool (DAY_TEMP)
-
-### Manual Usage
-
-You can also use the tool directly (requires TTY):
+Try values from a TTY (or any time the compositor isn't holding master):
 
 ```bash
-# From TTY (Ctrl+Alt+F3):
-sudo drm_colortemp -d /dev/dri/card1 -t 3500
+sudo drm-gamma -rgamma 0.80 -ggamma 0.80 -bgamma 0.90      # gamma only (6500K)
+sudo drm-gamma -t 4500 -rgamma 0.9 -ggamma 0.9 -bgamma 1.0 # with temperature
+sudo drm-gamma -b 0.8 -rgamma 0.9                          # with brightness
+sudo drm-gamma -r                                          # reset to linear
+sudo drm-gamma -l                                          # list cards/CRTCs/connectors
 ```
 
-### COSMIC Panel Applet (Optional)
+Once you're happy, make it permanent in `/etc/default/drm-gamma.conf`. The
+daemon reloads the file on change; no restart needed:
 
-Prefer clicking a panel icon over pressing Ctrl+Alt+F-keys? An optional COSMIC
-panel applet lives in [`applet/`](applet/). It shows a popup with
-**Auto / Night / Day** buttons; clicking one performs the VT-switch dance for
-you via a small root helper (authorized by a narrow sudoers rule).
-
-It ships as its own package, so the daemon package stays free of libcosmic's
-wayland/xkbcommon runtime dependencies:
-
-```bash
-# Debian / Ubuntu — attached to every release
-sudo apt install ./drm-colortemp-cosmic-applet_*.deb
-
-# Arch (AUR)
-yay -S cosmic-applet-colortemp
-
-# Or from source (requires a Rust toolchain)
-make applet
-sudo make install-applet
+```ini
+RGAMMA=0.80
+GGAMMA=0.80
+BGAMMA=0.90
 ```
 
-Packaged installs authorize the helper for the `sudo` group (Debian/Ubuntu) or
-`wheel` (Arch); a source install authorizes only the user running `install.sh`.
+### CLI
 
-Then add it to your panel: COSMIC Settings → Desktop → Panel → Configure panel
-applets → **Add "Color Temperature"**. See [applet/README.md](applet/README.md)
-for details.
+| Flag | Description |
+|------|-------------|
+| `-rgamma`, `-ggamma`, `-bgamma` (or `--rgamma` …) | Per-channel gamma, 0.1–10 |
+| `-t, --temperature K` | Color temperature, 1000–10000 (default 6500) |
+| `-b, --brightness X` | Brightness multiplier, 0.1–1.0 |
+| `-d, --device PATH` | DRM device (default `/dev/dri/card1`, auto-falls back) |
+| `-r, --reset` | Reset to 6500K, brightness 1, gamma 1 |
+| `-l, --list` | List DRM devices, CRTCs, connectors |
+| `-D, --daemon` | Run as daemon (root) |
+| `-c, --config PATH` | Daemon config (default `/etc/default/drm-gamma.conf`) |
+| `-v, --verbose` | Debug logging |
 
 ## Configuration
 
-Edit the config file (changes apply automatically via inotify, no restart needed):
-```bash
-sudo nano /etc/default/drm-colortemp.conf
-```
-
-### Options
+`/etc/default/drm-gamma.conf`:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| DEVICE | *(auto)* | DRM device — omit to auto-detect all cards with CRTCs |
-| DEVICE1 … DEVICE8 | — | Explicit multi-card setup (see below) |
-| DAY_TEMP | 6500 | Daytime temperature (Kelvin) |
-| NIGHT_TEMP | 3500 | Nighttime temperature (Kelvin) |
-| SUNSET_HOUR | 20 | When to switch to night mode (24h) |
-| SUNRISE_HOUR | 8 | When to switch to day mode (24h) |
-| MONITOR_TTY | 3 | Which TTY to monitor for auto-apply |
-| WARM_TTY | 4 | TTY to force warm (night) temperature |
-| COOL_TTY | 5 | TTY to force cool (day) temperature |
-| NOTIFY_ENABLED | 0 | Enable desktop notifications (0/1) |
-| NOTIFY_USER | "" | Username to send notifications to |
-| NOTIFY_MINUTES_BEFORE | 5 | Minutes before sunset/sunrise to notify |
-| VERBOSE | 0 | Enable verbose logging (0/1) |
-
-### Multi-Card / Device Selection
-
-By default (no `DEVICE` key set), the daemon **auto-detects all DRM cards** that have active CRTCs and applies temperature to all of them simultaneously.
-
-For explicit control:
-
-```ini
-# Single card (legacy syntax, still supported)
-DEVICE="/dev/dri/card1"
-
-# Multi-card: apply to two GPUs at once
-DEVICE1="/dev/dri/card0"
-DEVICE2="/dev/dri/card1"
-```
-
-Up to 8 devices (`DEVICE1`–`DEVICE8`) are supported. If both `DEVICE` and `DEVICE1` are specified, `DEVICE1` takes the slot 1 position.
-
-### Color Temperature Guide
-
-- **6500K** - Neutral daylight (default)
-- **5500K** - Slightly warm
-- **4500K** - Warm
-- **3500K** - Evening/sunset
-- **2700K** - Warm incandescent bulb
-- **2000K** - Very warm candlelight
-
-### Desktop Notifications
-
-```bash
-# Install notification service (if not done during initial install)
-sudo make install-notifier
-
-# Set in /etc/default/drm-colortemp.conf:
-#   NOTIFY_ENABLED=1
-#   NOTIFY_USER="your_username"
-
-sudo systemctl enable --now drm-colortemp-notifier
-```
-
-See [NOTIFICATIONS.md](NOTIFICATIONS.md) for detailed documentation.
-
-## Systemd Service Management
-
-```bash
-# Main daemon
-sudo systemctl status drm-colortemp-daemon
-sudo systemctl restart drm-colortemp-daemon
-sudo journalctl -u drm-colortemp-daemon -f
-
-# Notification daemon (if installed)
-sudo systemctl status drm-colortemp-notifier
-sudo journalctl -u drm-colortemp-notifier -f
-```
+| RGAMMA / GGAMMA / BGAMMA | 1.0 | Per-channel gamma (0.1–10) |
+| DAY_TEMP | 6500 | Daytime temperature (K). Keep at 6500 for gamma-only use |
+| NIGHT_TEMP | 3500 | Nighttime temperature (K). Set to 6500 to disable night shift |
+| SUNSET_HOUR / SUNRISE_HOUR | 20 / 8 | Day/night switch hours (24h) |
+| MONITOR_TTY / WARM_TTY / COOL_TTY | 3 / 4 / 5 | Trigger TTYs |
+| DEVICE, DEVICE1…DEVICE8 | *(auto)* | DRM card(s). Omit to auto-detect all |
+| CONNECTOR | "" | Limit to one output, e.g. `DP-1`, `HDMI-A-1`, `eDP-1` |
+| GAMMA_SIZE | 0 | LUT size override (0 = hardware size) |
+| CHECK_INTERVAL | 1 | Poll interval, seconds |
+| VERBOSE | 0 | Verbose logging |
+| NOTIFY_ENABLED / NOTIFY_USER / NOTIFY_MINUTES_BEFORE | 0 / "" / 5 | Notifier settings |
 
 ## Troubleshooting
 
-### "Permission denied" errors
-- Ensure daemon is running: `sudo systemctl status drm-colortemp-daemon`
-- Check device path in config: `/etc/default/drm-colortemp.conf`
-- Verify you're on the correct TTY when applying
-
-### Color not applying
-- Check logs: `sudo journalctl -u drm-colortemp-daemon -f`
-- Ensure you switch to TTY3 (not TTY1 or TTY2)
-- Verify the tool works manually from TTY3
-
-### Config changes not detected
-- Check logs for inotify errors
-- Make sure config file exists: `ls -la /etc/default/drm-colortemp.conf`
-- Inotify watches the directory, so any editor (nano, vim, etc.) should work
-
-### Notifications not appearing
-- Check `NOTIFY_ENABLED=1` and `NOTIFY_USER` in config
-- Ensure `notify-send` is installed: `sudo apt install libnotify-bin`
-- Test manually: `sudo ./scripts/drm-colortemp-notify.sh your_username 3500 night`
-
-### Finding your DRM device
-```bash
-ls -la /dev/dri/
-# Look for card0, card1, etc.
-```
-
-The daemon auto-detects all cards with CRTCs when no `DEVICE` is configured. To target specific cards, set `DEVICE1`, `DEVICE2`, etc. in `/etc/default/drm-colortemp.conf`.
-
-## Uninstallation
-
-```bash
-sudo make uninstall
-# Config file is preserved at /etc/default/drm-colortemp.conf
-# Remove manually if desired: sudo rm /etc/default/drm-colortemp.conf
-```
-
-## Rust Implementation (v2.0)
-
-**New in v2.0:** Complete rewrite in Rust for improved safety and maintainability!
-
-The Rust implementation (`drm-colortemp-rs`) provides:
-- **Memory safety** - No segfaults, buffer overflows, or use-after-free bugs
-- **Thread-safe daemon** - Proper signal handling and concurrent access
-- **Better error messages** - Clear, actionable error output
-- **Same functionality** - 100% feature parity with C version
-- **Smaller binary** - ~1.8 MB stripped (vs ~3 MB for C version)
-
-### Building the Rust Version
-
-```bash
-# Install Rust (if not already installed)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Build release version
-cd drm-colortemp
-cargo build --release
-
-# Install binary
-sudo cp target/release/drm-colortemp-rs /usr/local/bin/drm-colortemp
-sudo cp drm-colortemp.service /etc/systemd/system/
-sudo systemctl daemon-reload
-```
-
-### Rust vs C Version
-
-| Feature | C Version | Rust Version |
-|---------|-----------|--------------|
-| CLI tool | ✅ | ✅ |
-| Daemon mode | ✅ | ✅ |
-| Config parsing | ✅ | ✅ |
-| Inotify watch | ✅ | ✅ |
-| Signal handling | ✅ | ✅ |
-| Memory safety | ⚠️ Manual | ✅ Compile-time |
-| Binary size | ~3 MB | ~1.8 MB |
-| Build time | ~5s | ~45s |
-
-Both versions are supported. The C version remains available for systems without Rust.
-
----
-
-## Original C Implementation
-
-### Why This Works
-
-The Linux DRM (Direct Rendering Manager) subsystem controls display output. Wayland compositors like COSMIC hold "DRM master" - exclusive control over the display. This prevents other processes from adjusting gamma.
-
-When you switch to a text console (TTY3), COSMIC temporarily releases DRM master. Our daemon detects this switch and immediately applies the gamma settings before COSMIC reclaims control. When you switch back, the settings persist because COSMIC doesn't actively reset them.
-
-### Components
-
-1. **drm_colortemp** - CLI tool using DRM ioctls to set gamma LUTs
-2. **drm_colortemp_daemon** - Monitors VT switches via `VT_GETSTATE` ioctl
-3. **drm_device** - Shared DRM device detection and auto-fallback
-4. **inotify** - Watches config file directory for changes without polling
-5. **systemd** - Manages daemon lifecycle and logging
-6. **notification system** - Optional reminder service with desktop notifications
-
-### Why Not Just Use Redshift?
-
-COSMIC needs to implement the `wlr-gamma-control-unstable-v1` Wayland protocol for tools like `redshift` and `wlsunset` to work. Until then, direct DRM manipulation is the only option.
-
-Track progress: https://github.com/pop-os/cosmic-comp/issues/2059
-
-## Future
-
-Once COSMIC implements `wlr-gamma-control-unstable-v1`, you can switch to:
-- `wlsunset` - Automatic sunset/sunrise calculation
-- `gammastep` - Redshift fork for Wayland
-- Native COSMIC settings
-
-Until then, this provides a functional workaround!
+- **Logs:** `sudo journalctl -u drm-gamma -f`
+- **Nothing changes:** you're probably running it while the compositor holds
+  master. Do it from a TTY, or use the daemon + TTY round-trip.
+- **Wrong card:** run `drm-gamma -l` and set `DEVICE1=` / `CONNECTOR=`.
+- **Notifications:** see [NOTIFICATIONS.md](NOTIFICATIONS.md).
 
 ## License
 
-Apache License 2.0 - see [LICENSE](LICENSE)
-
-## Credits
-
-Color temperature algorithm based on Tanner Helland's work:
-http://www.tannerhelland.com/4435/convert-temperature-rgb-algorithm-code/
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
-
-This is a workaround tool. The real solution is for COSMIC to implement gamma control protocol. Consider contributing to https://github.com/pop-os/cosmic-comp.
+Apache License 2.0, see [LICENSE](LICENSE). Original work © jjo
+([drm-colortemp](https://github.com/jjo/drm-colortemp)). Color temperature
+curve from [Tanner Helland](http://www.tannerhelland.com/4435/convert-temperature-rgb-algorithm-code/).

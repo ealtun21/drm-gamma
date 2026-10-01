@@ -9,8 +9,8 @@ use crate::vt;
 use inotify::{EventMask, Inotify, WatchMask};
 use log::{debug, error, info, warn};
 use nix::poll::{poll, PollFd, PollFlags};
-use nix::sys::signal::{self, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::signal::SaFlags;
+use nix::sys::signal::{self, SigAction, SigHandler, SigSet, Signal};
 use std::os::fd::{AsRawFd, BorrowedFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -112,7 +112,8 @@ fn apply_temperature(config: &Config, temp: u32) -> Result<(), &'static str> {
             } else {
                 info.gamma_size as usize
             };
-            let (r, g, b) = temperature::generate_gamma_luts(effective_size, temp, 1.0);
+            let (r, g, b) =
+                temperature::generate_gamma_luts(effective_size, temp, 1.0, config.gamma);
             match drm::set_gamma(dev.fd(), crtc_id, &r, &g, &b) {
                 Ok(()) => {
                     any_success = true;
@@ -133,7 +134,7 @@ fn apply_temperature(config: &Config, temp: u32) -> Result<(), &'static str> {
 }
 
 pub fn run(config_path: &str) -> Result<(), DaemonError> {
-    info!("Starting drm-colortemp daemon");
+    info!("Starting drm-gamma daemon");
     info!("Config file: {config_path}");
 
     install_signal_handlers()?;
@@ -215,7 +216,9 @@ pub fn run(config_path: &str) -> Result<(), DaemonError> {
                 }
                 Err(e) => {
                     if last_failure.is_none() {
-                        error!("Apply {target_temp}K failed: {e} (backing off {failure_backoff:?})");
+                        error!(
+                            "Apply {target_temp}K failed: {e} (backing off {failure_backoff:?})"
+                        );
                     } else {
                         debug!("Apply {target_temp}K still failing: {e}");
                     }
@@ -322,9 +325,7 @@ fn wait_for_event(inotify_fd: Option<i32>, timeout: Duration) {
     };
     let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
     let mut fds = [PollFd::new(&borrowed, PollFlags::POLLIN)];
-    let ms = timeout
-        .as_millis()
-        .min(i32::MAX as u128) as i32;
+    let ms = timeout.as_millis().min(i32::MAX as u128) as i32;
     // EINTR (e.g. from SIGHUP/SIGTERM) is expected and silently breaks the wait.
     let _ = poll(&mut fds, ms);
 }
@@ -340,6 +341,12 @@ fn log_startup(c: &Config) {
     );
     if !c.connector.is_empty() {
         info!("Connector filter: {}", c.connector);
+    }
+    if c.gamma != [1.0; 3] {
+        info!(
+            "Gamma r/g/b: {:.2} {:.2} {:.2}",
+            c.gamma[0], c.gamma[1], c.gamma[2]
+        );
     }
     if c.gamma_size > 0 {
         info!("Gamma size override: {}", c.gamma_size);
@@ -390,7 +397,10 @@ mod tests {
 
     #[test]
     fn test_config_basename() {
-        assert_eq!(config_basename(Path::new("/etc/drm-colortemp.conf")), "drm-colortemp.conf");
+        assert_eq!(
+            config_basename(Path::new("/etc/drm-gamma.conf")),
+            "drm-gamma.conf"
+        );
         assert_eq!(config_basename(Path::new("foo.conf")), "foo.conf");
     }
 }

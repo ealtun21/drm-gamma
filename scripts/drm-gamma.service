@@ -1,12 +1,12 @@
 [Unit]
-Description=DRM Color Temperature Daemon
-Documentation=https://github.com/jjo/drm-colortemp
+Description=DRM gamma / color temperature daemon
+Documentation=https://github.com/ealtun21/drm-gamma
 After=display-manager.service
 Wants=display-manager.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/drm-colortemp --daemon
+ExecStart=/usr/local/bin/drm-gamma --daemon
 Restart=on-failure
 RestartSec=5s
 Environment=RUST_LOG=info
@@ -17,7 +17,7 @@ ProtectSystem=strict
 ProtectHome=true
 # Daemon only reads the config; ProtectSystem=strict already keeps /etc read-only.
 # Path matches `src/main.rs: DEFAULT_DAEMON_CONFIG` and the .deb conffile.
-ReadOnlyPaths=/etc/default/drm-colortemp.conf
+ReadOnlyPaths=/etc/default/drm-gamma.conf
 PrivateTmp=true
 
 # Allow all DRM devices. Hard-coding card0 breaks on machines where the

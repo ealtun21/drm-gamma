@@ -1,7 +1,4 @@
-//! DRM Color Temperature - Rust implementation
-//!
-//! Adjust screen color temperature via DRM gamma ramps. Tracks the C
-//! implementation feature-for-feature (CLI + daemon).
+//! drm-gamma: per-channel gamma + color temperature via DRM gamma ramps.
 
 mod config;
 mod daemon;
@@ -17,20 +14,21 @@ use nix::unistd::geteuid;
 use std::process::ExitCode;
 
 const DEFAULT_DEVICE: &str = "/dev/dri/card1";
-const DEFAULT_DAEMON_CONFIG: &str = "/etc/default/drm-colortemp.conf";
+const DEFAULT_DAEMON_CONFIG: &str = "/etc/default/drm-gamma.conf";
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "drm-colortemp",
+    name = "drm-gamma",
     author,
     version,
-    about = "Adjust DRM color temperature",
-    long_about = "A tool for adjusting screen color temperature via DRM (Direct Rendering Manager).\n\n\
-    Examples:\n  drm-colortemp -t 6500           # Set temperature to 6500K\n  \
-    drm-colortemp -t 3500 -b 0.8    # Warm temperature, 80% brightness\n  \
-    drm-colortemp -l                # List available displays\n  \
-    drm-colortemp -r                # Reset to defaults\n  \
-    drm-colortemp --daemon -c /etc/default/drm-colortemp.conf"
+    about = "Persistent per-channel gamma and color temperature via DRM",
+    long_about = "Set per-channel gamma and color temperature directly on DRM gamma tables (works under Xorg and Wayland).\n\n\
+    Examples:\n  drm-gamma -t 6500           # Set temperature to 6500K\n  \
+    drm-gamma -t 3500 -b 0.8    # Warm temperature, 80% brightness\n  \
+    drm-gamma -rgamma 0.8 -ggamma 0.8 -bgamma 0.9  # Per-channel gamma\n  \
+    drm-gamma -l                # List available displays\n  \
+    drm-gamma -r                # Reset to defaults\n  \
+    drm-gamma --daemon -c /etc/default/drm-gamma.conf"
 )]
 struct Args {
     /// Color temperature in Kelvin (1000-10000)
@@ -40,6 +38,18 @@ struct Args {
     /// Brightness multiplier (0.1-1.0)
     #[arg(short = 'b', long)]
     brightness: Option<f64>,
+
+    /// Red gamma (0.1-10, xgamma convention; also accepts -rgamma)
+    #[arg(long)]
+    rgamma: Option<f64>,
+
+    /// Green gamma (0.1-10; also accepts -ggamma)
+    #[arg(long)]
+    ggamma: Option<f64>,
+
+    /// Blue gamma (0.1-10; also accepts -bgamma)
+    #[arg(long)]
+    bgamma: Option<f64>,
 
     /// DRM device path
     #[arg(short = 'd', long, default_value = DEFAULT_DEVICE)]
@@ -67,7 +77,11 @@ struct Args {
 }
 
 fn main() -> ExitCode {
-    let args = Args::parse();
+    // xgamma-style single-dash long flags: -rgamma -> --rgamma
+    let args = Args::parse_from(std::env::args().map(|a| match a.as_str() {
+        "-rgamma" | "-ggamma" | "-bgamma" => format!("-{a}"),
+        _ => a,
+    }));
     init_logging(args.verbose);
 
     if args.daemon {
@@ -88,14 +102,17 @@ fn main() -> ExitCode {
 
     if args.reset {
         info!("Resetting to default temperature (6500K)");
-        return apply_temperature_cli(6500, 1.0, &args.device);
+        return apply_temperature_cli(6500, 1.0, [1.0; 3], &args.device);
     }
 
     if args.list {
         return list_displays(&args.device);
     }
 
-    if let Some(temp) = args.temperature {
+    let gamma = [args.rgamma, args.ggamma, args.bgamma];
+    if args.temperature.is_some() || args.brightness.is_some() || gamma.iter().any(Option::is_some)
+    {
+        let temp = args.temperature.unwrap_or(6500);
         if !(1000..=10000).contains(&temp) {
             eprintln!("Temperature must be between 1000 and 10000K");
             return ExitCode::from(1);
@@ -105,15 +122,12 @@ fn main() -> ExitCode {
             eprintln!("Brightness must be between 0.1 and 1.0");
             return ExitCode::from(1);
         }
-        return apply_temperature_cli(temp, brightness, &args.device);
-    }
-
-    if let Some(brightness) = args.brightness {
-        if !(0.1..=1.0).contains(&brightness) {
-            eprintln!("Brightness must be between 0.1 and 1.0");
+        let gamma = gamma.map(|g| g.unwrap_or(1.0));
+        if !gamma.iter().all(|g| config::GAMMA_RANGE.contains(g)) {
+            eprintln!("Gamma must be between 0.1 and 10");
             return ExitCode::from(1);
         }
-        return apply_temperature_cli(6500, brightness, &args.device);
+        return apply_temperature_cli(temp, brightness, gamma, &args.device);
     }
 
     let _ = Args::command().print_help();
@@ -132,8 +146,16 @@ fn init_logging(verbose: bool) {
         .try_init();
 }
 
-fn apply_temperature_cli(temp: u32, brightness: f64, device_path: &str) -> ExitCode {
-    info!("Setting {temp}K, brightness {brightness:.2}");
+fn apply_temperature_cli(
+    temp: u32,
+    brightness: f64,
+    gamma: [f64; 3],
+    device_path: &str,
+) -> ExitCode {
+    info!(
+        "Setting {temp}K, brightness {brightness:.2}, gamma {:.2}/{:.2}/{:.2}",
+        gamma[0], gamma[1], gamma[2]
+    );
 
     let dev = match device::open_device(device_path) {
         Ok(d) => d,
@@ -142,16 +164,18 @@ fn apply_temperature_cli(temp: u32, brightness: f64, device_path: &str) -> ExitC
             eprintln!("Error: {e}");
             eprintln!("\nAvailable DRM devices:");
             list_dev_dri_to_stderr();
-            eprintln!(
-                "\nTry running with sudo, or add your user to the 'video' group."
-            );
+            eprintln!("\nTry running with sudo, or add your user to the 'video' group.");
             eprintln!("Or specify a device with: -d /dev/dri/cardX");
             return ExitCode::from(1);
         }
     };
 
     if dev.path() != device_path {
-        info!("Using device: {} (preferred {} unusable)", dev.path(), device_path);
+        info!(
+            "Using device: {} (preferred {} unusable)",
+            dev.path(),
+            device_path
+        );
     }
 
     device::try_become_master(&dev);
@@ -186,7 +210,7 @@ fn apply_temperature_cli(temp: u32, brightness: f64, device_path: &str) -> ExitC
             continue;
         }
         let (r, g, b) =
-            temperature::generate_gamma_luts(info.gamma_size as usize, temp, brightness);
+            temperature::generate_gamma_luts(info.gamma_size as usize, temp, brightness, gamma);
         match drm::set_gamma(dev.fd(), crtc_id, &r, &g, &b) {
             Ok(()) => {
                 info!("Applied to CRTC {crtc_id}");
@@ -250,7 +274,8 @@ fn list_displays(device_path: &str) -> ExitCode {
                 for &id in &res.connectors {
                     match drm::get_connector(dev.fd(), id) {
                         Ok(c) => {
-                            let (long, short) = drm::connector_names(c.connector_type, c.connector_type_id);
+                            let (long, short) =
+                                drm::connector_names(c.connector_type, c.connector_type_id);
                             println!(
                                 "    ID={id}  {long} (alias {short})  encoder={}",
                                 c.encoder_id
@@ -287,7 +312,7 @@ mod tests {
 
     #[test]
     fn test_gamma_lut_sizes() {
-        let (r, g, b) = temperature::generate_gamma_luts(256, 6500, 1.0);
+        let (r, g, b) = temperature::generate_gamma_luts(256, 6500, 1.0, [1.0; 3]);
         assert_eq!(r.len(), 256);
         assert_eq!(g.len(), 256);
         assert_eq!(b.len(), 256);

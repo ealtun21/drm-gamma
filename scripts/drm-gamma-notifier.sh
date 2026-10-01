@@ -1,8 +1,8 @@
 #!/bin/bash
-# drm-colortemp-notifier.sh - Send periodic notifications to remind user to apply color temp
+# drm-gamma-notifier.sh - Send periodic notifications to remind user to apply color temp
 # This runs as a separate lightweight daemon
 
-CONFIG_FILE="/etc/default/drm-colortemp.conf"
+CONFIG_FILE="/etc/default/drm-gamma.conf"
 
 # Source config
 if [ -f "$CONFIG_FILE" ]; then
@@ -53,7 +53,7 @@ while true; do
     # Check for sunset notification
     if [ $CURRENT_MINUTES -eq $SUNSET_NOTIFY_TIME ] && [ $SUNSET_NOTIFIED -eq 0 ]; then
         echo "$(date): Sending sunset notification"
-        /usr/local/bin/drm-colortemp-notify.sh "$NOTIFY_USER" "$NIGHT_TEMP" "night"
+        /usr/local/bin/drm-gamma-notify.sh "$NOTIFY_USER" "$NIGHT_TEMP" "night"
         SUNSET_NOTIFIED=1
     elif [ $CURRENT_MINUTES -ne $SUNSET_NOTIFY_TIME ]; then
         SUNSET_NOTIFIED=0
@@ -62,7 +62,7 @@ while true; do
     # Check for sunrise notification
     if [ $CURRENT_MINUTES -eq $SUNRISE_NOTIFY_TIME ] && [ $SUNRISE_NOTIFIED -eq 0 ]; then
         echo "$(date): Sending sunrise notification"
-        /usr/local/bin/drm-colortemp-notify.sh "$NOTIFY_USER" "$DAY_TEMP" "day"
+        /usr/local/bin/drm-gamma-notify.sh "$NOTIFY_USER" "$DAY_TEMP" "day"
         SUNRISE_NOTIFIED=1
     elif [ $CURRENT_MINUTES -ne $SUNRISE_NOTIFY_TIME ]; then
         SUNRISE_NOTIFIED=0

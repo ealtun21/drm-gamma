@@ -1,11 +1,11 @@
 [Unit]
-Description=DRM Color Temperature Notification Service
-Documentation=man:drm_colortemp(1)
+Description=drm-gamma notification Service
+Documentation=https://github.com/ealtun21/drm-gamma
 After=graphical.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/drm-colortemp-notifier.sh
+ExecStart=/usr/local/bin/drm-gamma-notifier.sh
 Restart=always
 RestartSec=60
 StandardOutput=journal

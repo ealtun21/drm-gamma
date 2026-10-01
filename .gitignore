@@ -1,9 +1,3 @@
-# Compiled binaries
-drm_colortemp
-drm_colortemp_daemon
-*.o
-*.a
-*.so
 
 # Build artifacts
 *.tar.gz
@@ -42,5 +36,3 @@ build-deb/
 .claude/
 .hermes/
 
-# Applet build artifacts
-applet/target/

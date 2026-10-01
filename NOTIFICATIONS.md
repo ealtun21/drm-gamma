@@ -8,7 +8,7 @@ The daemon monitors the time and sends a desktop notification X minutes before s
 
 ## Configuration
 
-Edit `/etc/default/drm-colortemp.conf`:
+Edit `/etc/default/drm-gamma.conf`:
 
 ```bash
 # Enable notifications
@@ -39,11 +39,11 @@ Press Ctrl+Alt+F3 then F2 to apply warm 3500K
 
 ## Manual Implementation
 
-The daemon calls `scripts/drm-colortemp-notify.sh` which you can also call manually:
+The daemon calls `scripts/drm-gamma-notify.sh` which you can also call manually:
 
 ```bash
 # Test notification
-sudo ./scripts/drm-colortemp-notify.sh your_username 3500 night
+sudo ./scripts/drm-gamma-notify.sh your_username 3500 night
 ```
 
 ## Troubleshooting
@@ -52,7 +52,7 @@ sudo ./scripts/drm-colortemp-notify.sh your_username 3500 night
 1. Check NOTIFY_ENABLED=1 in config
 2. Verify NOTIFY_USER is set correctly
 3. Ensure `notify-send` is installed: `sudo apt install libnotify-bin`
-4. Check daemon logs: `sudo journalctl -u drm-colortemp-daemon -f`
+4. Check daemon logs: `sudo journalctl -u drm-gamma -f`
 
 **Notifications to wrong user:**
 - Set NOTIFY_USER explicitly in config file

@@ -12,7 +12,7 @@
 
 ## Checklist
 - [ ] Code compiles without warnings
-- [ ] Tested on Pop!_OS/Ubuntu with COSMIC
+- [ ] Tested on real hardware (note distro + compositor)
 - [ ] Updated documentation if needed
 - [ ] Follows existing code style
 - [ ] Shell scripts pass shellcheck (if applicable)

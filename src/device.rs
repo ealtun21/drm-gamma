@@ -125,8 +125,7 @@ fn open_raw(path: &str) -> Result<DrmDevice, DeviceError> {
     if !Path::new(path).exists() {
         return Err(DeviceError::InvalidPath(path.to_string()));
     }
-    let c_path =
-        CString::new(path).map_err(|_| DeviceError::InvalidPath(path.to_string()))?;
+    let c_path = CString::new(path).map_err(|_| DeviceError::InvalidPath(path.to_string()))?;
     let fd = unsafe { libc::open(c_path.as_ptr(), libc::O_RDWR) };
     if fd < 0 {
         return Err(DeviceError::Open(

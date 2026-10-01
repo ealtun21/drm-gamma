@@ -1,6 +1,6 @@
 //! Configuration parsing for DRM color temperature.
 //!
-//! INI-style KEY=VALUE parser mirroring the C version's behaviour:
+//! INI-style KEY=VALUE parser:
 //! - Out-of-range numeric values warn and keep the previous (defaulted) value.
 //! - Unknown keys are silently ignored.
 //! - DEVICE / DEVICE1..DEVICE8 fill an ordered device list.
@@ -34,6 +34,8 @@ pub struct Config {
     pub has_location: bool,
     pub connector: String,
     pub gamma_size: u32,
+    /// Per-channel (r, g, b) gamma calibration, applied on top of temperature.
+    pub gamma: [f64; 3],
 }
 
 impl Default for Config {
@@ -55,6 +57,7 @@ impl Default for Config {
             has_location: false,
             connector: String::new(),
             gamma_size: 0,
+            gamma: [1.0; 3],
         }
     }
 }
@@ -131,9 +134,18 @@ pub fn load_config<P: AsRef<Path>>(path: P) -> Result<Config, ConfigError> {
                 if value == "0" {
                     config.gamma_size = 0;
                 } else {
-                    set_int_u32(&mut config.gamma_size, key, value, GAMMA_SIZE_MIN, GAMMA_SIZE_MAX);
+                    set_int_u32(
+                        &mut config.gamma_size,
+                        key,
+                        value,
+                        GAMMA_SIZE_MIN,
+                        GAMMA_SIZE_MAX,
+                    );
                 }
             }
+            "RGAMMA" => set_gamma(&mut config.gamma[0], key, value),
+            "GGAMMA" => set_gamma(&mut config.gamma[1], key, value),
+            "BGAMMA" => set_gamma(&mut config.gamma[2], key, value),
             "LOCATION" => parse_location(&mut config, value),
             _ => {
                 // Unknown keys silently ignored to match C behaviour.
@@ -221,6 +233,18 @@ fn set_int_u32(slot: &mut u32, key: &str, value: &str, min: u32, max: u32) {
         ),
         Err(_) => warn!(
             "config: invalid integer for {key}: '{value}', keeping {}",
+            *slot
+        ),
+    }
+}
+
+pub const GAMMA_RANGE: std::ops::RangeInclusive<f64> = 0.1..=10.0;
+
+fn set_gamma(slot: &mut f64, key: &str, value: &str) {
+    match value.parse::<f64>() {
+        Ok(v) if GAMMA_RANGE.contains(&v) => *slot = v,
+        _ => warn!(
+            "config: {key}='{value}' invalid or outside [0.1,10], keeping {}",
             *slot
         ),
     }
@@ -355,6 +379,13 @@ mod tests {
     }
 
     #[test]
+    fn test_gamma_parsing() {
+        let f = write_temp_config("RGAMMA=0.80\nGGAMMA=0.8\nBGAMMA=99\n");
+        let c = load_config(f.path()).unwrap();
+        assert_eq!(c.gamma, [0.8, 0.8, 1.0]);
+    }
+
+    #[test]
     fn test_parse_bool_variants() {
         assert!(parse_bool("yes"));
         assert!(parse_bool("YES"));
@@ -368,7 +399,7 @@ mod tests {
 
     #[test]
     fn test_missing_file_returns_error() {
-        let r = load_config("/nonexistent/path/drm-colortemp.conf");
+        let r = load_config("/nonexistent/path/drm-gamma.conf");
         assert!(matches!(r, Err(ConfigError::Open { .. })));
     }
 }

@@ -1,5 +1,5 @@
 #!/bin/bash
-# drm-colortemp-notify.sh - Send desktop notification to user
+# drm-gamma-notify.sh - Send desktop notification to user
 # Called by daemon to notify user it's time to apply color temperature
 
 USERNAME="$1"

@@ -64,6 +64,7 @@ fn calc_blue(temp: f64) -> f64 {
 /// * `gamma_size` - Size of the LUT (typically 256)
 /// * `temp` - Color temperature in Kelvin
 /// * `brightness` - Brightness multiplier (0.0 to 1.0)
+/// * `gamma` - Per-channel (r, g, b) gamma, xgamma convention: out = in^(1/gamma)
 ///
 /// # Returns
 /// Tuple of (red_lut, green_lut, blue_lut) vectors
@@ -71,6 +72,7 @@ pub fn generate_gamma_luts(
     gamma_size: usize,
     temp: u32,
     brightness: f64,
+    gamma: [f64; 3],
 ) -> (Vec<u16>, Vec<u16>, Vec<u16>) {
     let (r_mult, g_mult, b_mult) = temp_to_rgb(temp);
     let r_mult = r_mult * brightness;
@@ -93,9 +95,9 @@ pub fn generate_gamma_luts(
 
     for i in 0..gamma_size {
         let value = i as f64 / (gamma_size - 1) as f64;
-        red_lut.push(to_u16(value * r_mult));
-        green_lut.push(to_u16(value * g_mult));
-        blue_lut.push(to_u16(value * b_mult));
+        red_lut.push(to_u16(value.powf(1.0 / gamma[0]) * r_mult));
+        green_lut.push(to_u16(value.powf(1.0 / gamma[1]) * g_mult));
+        blue_lut.push(to_u16(value.powf(1.0 / gamma[2]) * b_mult));
     }
 
     (red_lut, green_lut, blue_lut)
@@ -124,7 +126,7 @@ mod tests {
 
     #[test]
     fn test_gamma_lut_generation() {
-        let (red, green, blue) = generate_gamma_luts(256, 6500, 1.0);
+        let (red, green, blue) = generate_gamma_luts(256, 6500, 1.0, [1.0; 3]);
         assert_eq!(red.len(), 256);
         assert_eq!(green.len(), 256);
         assert_eq!(blue.len(), 256);
@@ -132,7 +134,7 @@ mod tests {
 
     #[test]
     fn test_gamma_lut_edge_case_size_1() {
-        let (red, green, blue) = generate_gamma_luts(1, 6500, 1.0);
+        let (red, green, blue) = generate_gamma_luts(1, 6500, 1.0, [1.0; 3]);
         assert_eq!(red.len(), 1);
         assert_eq!(green.len(), 1);
         assert_eq!(blue.len(), 1);
@@ -141,7 +143,7 @@ mod tests {
     #[test]
     fn test_gamma_lut_clamps_overflow() {
         // brightness > 1.0 must not wrap u16 values
-        let (red, green, blue) = generate_gamma_luts(256, 6500, 5.0);
+        let (red, green, blue) = generate_gamma_luts(256, 6500, 5.0, [1.0; 3]);
         for v in red.iter().chain(green.iter()).chain(blue.iter()) {
             // Just confirm no wrap-around to small values when multiplier saturates
             // (largest legitimate near-white value is 65535)
@@ -150,5 +152,15 @@ mod tests {
         assert_eq!(*red.last().unwrap(), 65535);
         assert_eq!(*green.last().unwrap(), 65535);
         assert_eq!(*blue.last().unwrap(), 65535);
+    }
+
+    #[test]
+    fn test_per_channel_gamma() {
+        let (red, green, blue) = generate_gamma_luts(256, 6500, 1.0, [0.8, 1.0, 1.25]);
+        let (lr, lg, lb) = generate_gamma_luts(256, 6500, 1.0, [1.0; 3]);
+        // gamma < 1 darkens midtones, > 1 brightens, endpoints untouched
+        assert!(red[128] < lr[128] && blue[128] > lb[128] && green[128] == lg[128]);
+        assert_eq!(red[0], 0);
+        assert_eq!(red[255], lr[255]);
     }
 }

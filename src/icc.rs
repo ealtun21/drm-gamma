@@ -3,7 +3,9 @@
 //! For compositors that own the gamma LUT and reset it (KDE, GNOME), the
 //! persistent path is an ICC profile the compositor applies itself.
 
-/// lcms2-generated sRGB v4 profile (no vcgt).
+/// lcms2-generated sRGB v4 profile (no vcgt), TRC patched from the sRGB
+/// piecewise curve to pure gamma 2.2: KWin decodes content as 2.2 and
+/// re-encodes with this TRC, so anything else shifts the shadows.
 const SRGB: &[u8] = include_bytes!("srgb.icc");
 
 fn be32(b: &[u8], at: usize) -> u32 {
@@ -118,6 +120,14 @@ mod tests {
             &p[vcgt + 18 + 2 * 255..vcgt + 18 + 2 * 256],
             &lut[255].to_be_bytes()
         );
+    }
+
+    #[test]
+    fn test_trc_is_gamma_22() {
+        let at = tag(b"rTRC");
+        assert_eq!(&SRGB[at..at + 4], b"para");
+        let p = |i: usize| be32(SRGB, at + 12 + 4 * i) as i32;
+        assert_eq!((p(0), p(1), p(2), p(3), p(4)), (144179, 65536, 0, 0, 0));
     }
 
     #[test]

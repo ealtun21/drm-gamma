@@ -104,7 +104,7 @@ drm-gamma -rgamma 0.80 -ggamma 0.80 -bgamma 0.90   # applied live to every enabl
 drm-gamma -r                                       # back to KWin's built-in sRGB
 ```
 
-It writes `~/.local/share/icc/drm-gamma-t6500-br1.00-r0.80-g0.80-b0.90.icc`,
+It writes `~/.local/share/icc/drm-gamma-t6500-br1.00-r0.80-g0.80-b0.90-s1.00-<hash>.icc`,
 points each output at it via `kscreen-doctor`, and deletes older
 `drm-gamma-*.icc` files. Each setting gets its own filename because KWin
 caches profiles by path. It works over ssh too; the session's Wayland socket

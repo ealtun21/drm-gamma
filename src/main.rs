@@ -204,14 +204,24 @@ fn icc_cli(
             eprintln!("Error creating {}: {e}", path.display());
             return ExitCode::from(1);
         }
-        // KWin caches profiles by path: each setting gets its own filename.
-        path.push(format!(
-            "drm-gamma-t{temp}-br{brightness:.2}-r{:.2}-g{:.2}-b{:.2}-s{saturation:.2}.icc",
-            gamma[0], gamma[1], gamma[2]
-        ));
     }
     let (r, g, b) = temperature::generate_gamma_luts(256, temp, brightness, gamma);
-    if let Err(e) = std::fs::write(&path, icc::build_profile(&r, &g, &b, saturation)) {
+    let profile = icc::build_profile(&r, &g, &b, saturation);
+    if auto {
+        // KWin caches profiles by path: a content hash keeps a changed
+        // profile (new setting or new drm-gamma) from hitting a stale entry.
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        profile.hash(&mut h);
+        path.push(format!(
+            "drm-gamma-t{temp}-br{brightness:.2}-r{:.2}-g{:.2}-b{:.2}-s{saturation:.2}-{:08x}.icc",
+            gamma[0],
+            gamma[1],
+            gamma[2],
+            h.finish() as u32
+        ));
+    }
+    if let Err(e) = std::fs::write(&path, profile) {
         eprintln!("Error writing {}: {e}", path.display());
         return ExitCode::from(1);
     }

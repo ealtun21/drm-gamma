@@ -36,8 +36,8 @@ compositor reset, one quick TTY round-trip restores the calibration:
 | F5 (`COOL_TTY`) | Force `DAY_TEMP` + gamma |
 
 > **KDE Plasma and GNOME reset the gamma table** when you switch back, so the
-> TTY trick doesn't stick there. Use an [ICC profile](#icc-profile-kde-gnome)
-> instead. Other compositors may also reset it on hotplug/DPMS wake; redo the
+> TTY trick doesn't stick there. On KDE, drm-gamma [handles this automatically](#kde-plasma-automatic);
+> on GNOME use an [ICC profile](#icc-profile-only-gnome-others). Other compositors may also reset it on hotplug/DPMS wake; redo the
 > TTY round-trip then.
 
 ## Install
@@ -83,36 +83,33 @@ GGAMMA=0.80
 BGAMMA=0.90
 ```
 
-### ICC profile (KDE, GNOME)
+### KDE Plasma (automatic)
 
-Compositors that manage colour themselves overwrite the DRM gamma table, but
-they do apply an ICC profile's `vcgt` calibration curve, and they keep it
-across reboots. `--icc` writes an sRGB profile carrying the same curves
-(gamma, plus `-t`/`-b` if given). It needs no root and doesn't touch DRM.
-Given a directory, it names the file after the settings (e.g.
-`drm-gamma-t6500-br1.00-r0.80-g0.80-b0.90.icc`) and prints the path:
+KWin overwrites the DRM gamma table, but it applies an ICC profile's `vcgt`
+calibration curve and keeps it across reboots. drm-gamma detects a running
+KWin and switches to that path by itself. **Run it as your user, not sudo:**
 
 ```bash
-mkdir -p ~/.local/share/icc
+drm-gamma -rgamma 0.80 -ggamma 0.80 -bgamma 0.90   # applied live to every enabled output
+drm-gamma -r                                       # back to KWin's built-in sRGB
+```
+
+It writes `~/.local/share/icc/drm-gamma-t6500-br1.00-r0.80-g0.80-b0.90.icc`,
+points each output at it via `kscreen-doctor`, and deletes older
+`drm-gamma-*.icc` files. Each setting gets its own filename because KWin
+caches profiles by path. It works over ssh too; the session's Wayland socket
+is found automatically. No daemon needed: `sudo systemctl disable --now drm-gamma`.
+
+### ICC profile only (GNOME, others)
+
+`--icc DIR|FILE` writes the profile without applying it and prints the path.
+A directory gets an auto-named file:
+
+```bash
 drm-gamma --icc ~/.local/share/icc -rgamma 0.80 -ggamma 0.80 -bgamma 0.90
 ```
 
-- **KDE Plasma 6:** one line, works in bash and fish (`kscreen-doctor -o`
-  lists output names):
-  ```bash
-  kscreen-doctor output.eDP-1.colorProfileSource.ICC \
-    output.eDP-1.iccprofile.(drm-gamma --icc ~/.local/share/icc -rgamma 0.80 -ggamma 0.80 -bgamma 0.90)
-  # bash: use $(...) instead of (...)
-  # revert: kscreen-doctor output.eDP-1.colorProfileSource.sRGB
-  ```
-  Or System Settings → Display & Monitor → Color profile → ICC profile.
-- **GNOME:** Settings → Color → your display → Add profile → import the file.
-
-> KWin caches profiles **by path**. Rewriting the same file and reselecting it
-> does nothing. That's why directory mode gives every setting its own
-> filename. If you pass an explicit file path, use a new name each time.
-
-The daemon isn't needed in this mode: `sudo systemctl disable --now drm-gamma`.
+GNOME: Settings → Color → your display → Add profile → import the file.
 
 ### CLI
 
@@ -121,7 +118,7 @@ The daemon isn't needed in this mode: `sudo systemctl disable --now drm-gamma`.
 | `-rgamma`, `-ggamma`, `-bgamma` (or `--rgamma` …) | Per-channel gamma, 0.1–10 |
 | `-t, --temperature K` | Color temperature, 1000–10000 (default 6500) |
 | `-b, --brightness X` | Brightness multiplier, 0.1–1.0 |
-| `--icc DIR\|FILE` | Write an ICC profile instead of applying via DRM; a directory auto-names the file and prints its path |
+| `--icc DIR\|FILE` | Write an ICC profile instead of applying via DRM (a directory auto-names it). On KDE, applied automatically |
 | `-d, --device PATH` | DRM device (default `/dev/dri/card1`, auto-falls back) |
 | `-r, --reset` | Reset to 6500K, brightness 1, gamma 1 |
 | `-l, --list` | List DRM devices, CRTCs, connectors |

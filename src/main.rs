@@ -28,6 +28,7 @@ const DEFAULT_DAEMON_CONFIG: &str = "/etc/default/drm-gamma.conf";
     Examples:\n  drm-gamma -t 6500           # Set temperature to 6500K\n  \
     drm-gamma -t 3500 -b 0.8    # Warm temperature, 80% brightness\n  \
     drm-gamma -rgamma 0.8 -ggamma 0.8 -bgamma 0.9  # Per-channel gamma\n  \
+    drm-gamma -s 1.3            # 30% more saturation (vibrance)\n  \
     drm-gamma --icc ~/.local/share/icc -rgamma 0.8 -ggamma 0.8 -bgamma 0.9  # ICC profile (KDE/GNOME)\n  \
     drm-gamma -l                # List available displays\n  \
     drm-gamma -r                # Reset to defaults\n  \
@@ -53,6 +54,10 @@ struct Args {
     /// Blue gamma (0.1-10; also accepts -bgamma)
     #[arg(long)]
     bgamma: Option<f64>,
+
+    /// Saturation (0-2: 0 grayscale, 1 unchanged, >1 more vivid)
+    #[arg(short = 's', long)]
+    saturation: Option<f64>,
 
     /// Write an sRGB ICC profile (vcgt) instead of using DRM. A directory gets an
     /// auto-named file; its path is printed. On KDE this happens automatically
@@ -130,7 +135,7 @@ fn main() -> ExitCode {
             };
         }
         info!("Resetting to default temperature (6500K)");
-        return apply_temperature_cli(6500, 1.0, [1.0; 3], &args.device);
+        return apply_temperature_cli(6500, 1.0, [1.0; 3], 1.0, &args.device);
     }
 
     if args.list {
@@ -141,6 +146,7 @@ fn main() -> ExitCode {
     if args.temperature.is_some()
         || args.brightness.is_some()
         || gamma.iter().any(Option::is_some)
+        || args.saturation.is_some()
         || args.icc.is_some()
     {
         let temp = args.temperature.unwrap_or(6500);
@@ -158,10 +164,22 @@ fn main() -> ExitCode {
             eprintln!("Gamma must be between 0.1 and 10");
             return ExitCode::from(1);
         }
-        if kwin || args.icc.is_some() {
-            return icc_cli(args.icc.as_deref(), kwin, temp, brightness, gamma);
+        let saturation = args.saturation.unwrap_or(1.0);
+        if !config::SATURATION_RANGE.contains(&saturation) {
+            eprintln!("Saturation must be between 0 and 2");
+            return ExitCode::from(1);
         }
-        return apply_temperature_cli(temp, brightness, gamma, &args.device);
+        if kwin || args.icc.is_some() {
+            return icc_cli(
+                args.icc.as_deref(),
+                kwin,
+                temp,
+                brightness,
+                gamma,
+                saturation,
+            );
+        }
+        return apply_temperature_cli(temp, brightness, gamma, saturation, &args.device);
     }
 
     let _ = Args::command().print_help();
@@ -177,6 +195,7 @@ fn icc_cli(
     temp: u32,
     brightness: f64,
     gamma: [f64; 3],
+    saturation: f64,
 ) -> ExitCode {
     let mut path = target.map_or_else(kde::icc_dir, std::path::PathBuf::from);
     let auto = target.is_none() || path.is_dir();
@@ -187,12 +206,12 @@ fn icc_cli(
         }
         // KWin caches profiles by path: each setting gets its own filename.
         path.push(format!(
-            "drm-gamma-t{temp}-br{brightness:.2}-r{:.2}-g{:.2}-b{:.2}.icc",
+            "drm-gamma-t{temp}-br{brightness:.2}-r{:.2}-g{:.2}-b{:.2}-s{saturation:.2}.icc",
             gamma[0], gamma[1], gamma[2]
         ));
     }
     let (r, g, b) = temperature::generate_gamma_luts(256, temp, brightness, gamma);
-    if let Err(e) = std::fs::write(&path, icc::build_profile(&r, &g, &b)) {
+    if let Err(e) = std::fs::write(&path, icc::build_profile(&r, &g, &b, saturation)) {
         eprintln!("Error writing {}: {e}", path.display());
         return ExitCode::from(1);
     }
@@ -233,10 +252,11 @@ fn apply_temperature_cli(
     temp: u32,
     brightness: f64,
     gamma: [f64; 3],
+    saturation: f64,
     device_path: &str,
 ) -> ExitCode {
     info!(
-        "Setting {temp}K, brightness {brightness:.2}, gamma {:.2}/{:.2}/{:.2}",
+        "Setting {temp}K, brightness {brightness:.2}, gamma {:.2}/{:.2}/{:.2}, saturation {saturation:.2}",
         gamma[0], gamma[1], gamma[2]
     );
 
@@ -300,6 +320,12 @@ fn apply_temperature_cli(
                 success += 1;
             }
             Err(e) => error!("SETGAMMA CRTC {crtc_id}: {e}"),
+        }
+        match drm::set_saturation(dev.fd(), crtc_id, saturation) {
+            Ok(true) => {}
+            Ok(false) if saturation == 1.0 => {}
+            Ok(false) => warn!("CRTC {crtc_id} has no CTM: saturation unsupported"),
+            Err(e) => error!("CTM CRTC {crtc_id}: {e}"),
         }
     }
 

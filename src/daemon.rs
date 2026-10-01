@@ -123,6 +123,12 @@ fn apply_temperature(config: &Config, temp: u32) -> Result<(), &'static str> {
                 }
                 Err(e) => warn!("SETGAMMA on CRTC {crtc_id}: {e}"),
             }
+            match drm::set_saturation(dev.fd(), crtc_id, config.saturation) {
+                Ok(true) => {}
+                Ok(false) if config.saturation == 1.0 => {}
+                Ok(false) => warn!("CRTC {crtc_id} has no CTM: saturation unsupported"),
+                Err(e) => warn!("CTM on CRTC {crtc_id}: {e}"),
+            }
         }
     }
 
@@ -347,6 +353,9 @@ fn log_startup(c: &Config) {
             "Gamma r/g/b: {:.2} {:.2} {:.2}",
             c.gamma[0], c.gamma[1], c.gamma[2]
         );
+    }
+    if c.saturation != 1.0 {
+        info!("Saturation: {:.2}", c.saturation);
     }
     if c.gamma_size > 0 {
         info!("Gamma size override: {}", c.gamma_size);

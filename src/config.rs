@@ -36,6 +36,8 @@ pub struct Config {
     pub gamma_size: u32,
     /// Per-channel (r, g, b) gamma calibration, applied on top of temperature.
     pub gamma: [f64; 3],
+    /// Saturation via the CRTC color matrix (1.0 = unchanged).
+    pub saturation: f64,
 }
 
 impl Default for Config {
@@ -58,6 +60,7 @@ impl Default for Config {
             connector: String::new(),
             gamma_size: 0,
             gamma: [1.0; 3],
+            saturation: 1.0,
         }
     }
 }
@@ -146,6 +149,10 @@ pub fn load_config<P: AsRef<Path>>(path: P) -> Result<Config, ConfigError> {
             "RGAMMA" => set_gamma(&mut config.gamma[0], key, value),
             "GGAMMA" => set_gamma(&mut config.gamma[1], key, value),
             "BGAMMA" => set_gamma(&mut config.gamma[2], key, value),
+            "SATURATION" => match value.parse::<f64>() {
+                Ok(v) if SATURATION_RANGE.contains(&v) => config.saturation = v,
+                _ => warn!("config: SATURATION='{value}' invalid or outside [0,2], keeping 1.0"),
+            },
             "LOCATION" => parse_location(&mut config, value),
             _ => {
                 // Unknown keys silently ignored to match C behaviour.
@@ -239,6 +246,7 @@ fn set_int_u32(slot: &mut u32, key: &str, value: &str, min: u32, max: u32) {
 }
 
 pub const GAMMA_RANGE: std::ops::RangeInclusive<f64> = 0.1..=10.0;
+pub const SATURATION_RANGE: std::ops::RangeInclusive<f64> = 0.0..=2.0;
 
 fn set_gamma(slot: &mut f64, key: &str, value: &str) {
     match value.parse::<f64>() {
@@ -383,6 +391,28 @@ mod tests {
         let f = write_temp_config("RGAMMA=0.80\nGGAMMA=0.8\nBGAMMA=99\n");
         let c = load_config(f.path()).unwrap();
         assert_eq!(c.gamma, [0.8, 0.8, 1.0]);
+    }
+
+    #[test]
+    fn test_saturation_parsing() {
+        let c = load_config(
+            write_temp_config(
+                "SATURATION=1.3
+",
+            )
+            .path(),
+        )
+        .unwrap();
+        assert_eq!(c.saturation, 1.3);
+        let c = load_config(
+            write_temp_config(
+                "SATURATION=5
+",
+            )
+            .path(),
+        )
+        .unwrap();
+        assert_eq!(c.saturation, 1.0);
     }
 
     #[test]

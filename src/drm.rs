@@ -1,4 +1,4 @@
-//! Low-level DRM FFI: ioctls for CRTC enumeration, gamma set, connector lookup.
+//! Low-level DRM FFI: ioctls for CRTC enumeration, gamma/CTM set, connector lookup.
 //!
 //! Direct DRM ioctls (no libdrm dependency).
 
@@ -113,6 +113,83 @@ ioctl_readwrite!(
 );
 ioctl_none!(drm_set_master, DRM_IOCTL_BASE, 0x1e);
 
+#[repr(C)]
+#[derive(Default)]
+struct DrmModeObjGetProperties {
+    props_ptr: u64,
+    prop_values_ptr: u64,
+    count_props: u32,
+    obj_id: u32,
+    obj_type: u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct DrmModeGetProperty {
+    values_ptr: u64,
+    enum_blob_ptr: u64,
+    prop_id: u32,
+    flags: u32,
+    name: [u8; 32],
+    count_values: u32,
+    count_enum_blobs: u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct DrmModeObjSetProperty {
+    value: u64,
+    prop_id: u32,
+    obj_id: u32,
+    obj_type: u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct DrmModeCreateBlob {
+    data: u64,
+    length: u32,
+    blob_id: u32,
+}
+
+#[repr(C)]
+struct DrmModeDestroyBlob {
+    blob_id: u32,
+}
+
+ioctl_readwrite!(
+    drm_mode_getproperty,
+    DRM_IOCTL_BASE,
+    0xAA,
+    DrmModeGetProperty
+);
+ioctl_readwrite!(
+    drm_mode_obj_getproperties,
+    DRM_IOCTL_BASE,
+    0xB9,
+    DrmModeObjGetProperties
+);
+ioctl_readwrite!(
+    drm_mode_obj_setproperty,
+    DRM_IOCTL_BASE,
+    0xBA,
+    DrmModeObjSetProperty
+);
+ioctl_readwrite!(
+    drm_mode_createpropblob,
+    DRM_IOCTL_BASE,
+    0xBD,
+    DrmModeCreateBlob
+);
+ioctl_readwrite!(
+    drm_mode_destroypropblob,
+    DRM_IOCTL_BASE,
+    0xBE,
+    DrmModeDestroyBlob
+);
+
+const DRM_MODE_OBJECT_CRTC: u32 = 0xcccc_cccc;
+
 #[derive(Error, Debug)]
 pub enum DrmIoctlError {
     #[error("DRM ioctl {0} failed: {1}")]
@@ -204,6 +281,86 @@ pub fn set_gamma(
         drm_mode_setgamma(fd, &mut lut).map_err(|e| DrmIoctlError::Ioctl("SETGAMMA", e))?;
     }
     Ok(())
+}
+
+/// Id of the CRTC's "CTM" property, if the driver exposes one.
+fn ctm_prop_id(fd: RawFd, crtc_id: u32) -> Result<Option<u32>, DrmIoctlError> {
+    let mut q = DrmModeObjGetProperties {
+        obj_id: crtc_id,
+        obj_type: DRM_MODE_OBJECT_CRTC,
+        ..Default::default()
+    };
+    let err = |e| DrmIoctlError::Ioctl("OBJ_GETPROPERTIES", e);
+    unsafe { drm_mode_obj_getproperties(fd, &mut q) }.map_err(err)?;
+    let mut ids = vec![0u32; q.count_props as usize];
+    let mut vals = vec![0u64; q.count_props as usize];
+    q.props_ptr = ids.as_mut_ptr() as u64;
+    q.prop_values_ptr = vals.as_mut_ptr() as u64;
+    unsafe { drm_mode_obj_getproperties(fd, &mut q) }.map_err(err)?;
+    ids.truncate(q.count_props as usize);
+    for prop_id in ids {
+        let mut p = DrmModeGetProperty {
+            prop_id,
+            ..Default::default()
+        };
+        unsafe { drm_mode_getproperty(fd, &mut p) }
+            .map_err(|e| DrmIoctlError::Ioctl("GETPROPERTY", e))?;
+        if p.name.starts_with(b"CTM\0") {
+            return Ok(Some(prop_id));
+        }
+    }
+    Ok(None)
+}
+
+/// Saturation via the CRTC color matrix (1.0 = none, 0.0 = grayscale).
+/// Returns Ok(false) if the driver has no CTM.
+pub fn set_saturation(fd: RawFd, crtc_id: u32, saturation: f64) -> Result<bool, DrmIoctlError> {
+    let Some(prop_id) = ctm_prop_id(fd, crtc_id)? else {
+        return Ok(false);
+    };
+    // 1.0 detaches the matrix entirely instead of uploading identity.
+    let mut blob_id = 0;
+    if saturation != 1.0 {
+        // CTM entries are S31.32 sign-magnitude.
+        let ctm = saturation_matrix(saturation).map(|v| {
+            let mag = (v.abs() * (1u64 << 32) as f64).round() as u64;
+            if v < 0.0 {
+                mag | 1 << 63
+            } else {
+                mag
+            }
+        });
+        let mut b = DrmModeCreateBlob {
+            data: ctm.as_ptr() as u64,
+            length: std::mem::size_of_val(&ctm) as u32,
+            blob_id: 0,
+        };
+        unsafe { drm_mode_createpropblob(fd, &mut b) }
+            .map_err(|e| DrmIoctlError::Ioctl("CREATEPROPBLOB", e))?;
+        blob_id = b.blob_id;
+    }
+    let mut set = DrmModeObjSetProperty {
+        value: blob_id as u64,
+        prop_id,
+        obj_id: crtc_id,
+        obj_type: DRM_MODE_OBJECT_CRTC,
+    };
+    let r = unsafe { drm_mode_obj_setproperty(fd, &mut set) };
+    if blob_id != 0 {
+        // The CRTC keeps its own reference; drop ours either way.
+        let _ = unsafe { drm_mode_destroypropblob(fd, &mut DrmModeDestroyBlob { blob_id }) };
+    }
+    r.map_err(|e| DrmIoctlError::Ioctl("OBJ_SETPROPERTY", e))?;
+    Ok(true)
+}
+
+/// Row-major 3x3: lerp each channel between Rec.709 luma and itself.
+fn saturation_matrix(s: f64) -> [f64; 9] {
+    const W: [f64; 3] = [0.2126, 0.7152, 0.0722];
+    std::array::from_fn(|i| {
+        let (row, col) = (i / 3, i % 3);
+        (1.0 - s) * W[col] + if row == col { s } else { 0.0 }
+    })
 }
 
 /// Best-effort DRM master grab. C version warns and continues on failure.
@@ -332,6 +489,23 @@ mod tests {
         let (long, short) = connector_names(14, 1);
         assert_eq!(long, "eDP-1");
         assert_eq!(short, "eDP-1");
+    }
+
+    #[test]
+    fn test_saturation_matrix() {
+        assert_eq!(
+            saturation_matrix(1.0),
+            [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        );
+        // Rows sum to 1 (white/grays unchanged); s=0 makes all rows equal (grayscale).
+        for s in [0.0, 0.5, 2.0] {
+            let m = saturation_matrix(s);
+            for r in m.chunks(3) {
+                assert!((r.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+            }
+        }
+        let m = saturation_matrix(0.0);
+        assert_eq!(m[0..3], m[3..6]);
     }
 
     #[test]

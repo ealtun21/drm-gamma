@@ -10,8 +10,43 @@ fn be32(b: &[u8], at: usize) -> u32 {
     u32::from_be_bytes(b[at..at + 4].try_into().unwrap())
 }
 
-/// Build an sRGB ICC profile whose `vcgt` tag holds the given per-channel LUTs.
-pub fn build_profile(red: &[u16], green: &[u16], blue: &[u16]) -> Vec<u8> {
+/// Offset of tag `sig` in `SRGB`.
+fn tag(sig: &[u8; 4]) -> usize {
+    let count = be32(SRGB, 128) as usize;
+    (0..count)
+        .map(|i| 132 + 12 * i)
+        .find(|&e| &SRGB[e..e + 4] == sig)
+        .map(|e| be32(SRGB, e + 4) as usize)
+        .expect("tag in srgb.icc")
+}
+
+/// rXYZ/gXYZ/bXYZ moved toward (s < 1 → away from) white by 1/s. A colour-managed
+/// compositor maps sRGB onto these narrower primaries, i.e. saturates by s.
+/// White (their sum) stays put.
+fn scale_primaries(profile: &mut [u8], shift: usize, saturation: f64) {
+    let sigs = [b"rXYZ", b"gXYZ", b"bXYZ"];
+    let read = |p: &[u8], at: usize| be32(p, at) as i32 as f64 / 65536.0;
+    let cols = sigs.map(|s| {
+        let at = tag(s) + 8;
+        [0, 1, 2].map(|k| read(SRGB, at + 4 * k))
+    });
+    let white: [f64; 3] = std::array::from_fn(|k| cols.iter().map(|c| c[k]).sum());
+    // ponytail: ICC can't express true grayscale (primaries → ∞); floor at 0.1.
+    let t = 1.0 / saturation.max(0.1);
+    for (sig, col) in sigs.iter().zip(cols) {
+        let at = tag(sig) + 8 - shift;
+        let weight = col[1] / white[1]; // luminance share of this primary
+        for k in 0..3 {
+            let v = t * col[k] + (1.0 - t) * weight * white[k];
+            let fixed = (v * 65536.0).round() as i32;
+            profile[at + 4 * k..at + 4 * k + 4].copy_from_slice(&fixed.to_be_bytes());
+        }
+    }
+}
+
+/// Build an sRGB ICC profile whose `vcgt` tag holds the given per-channel LUTs,
+/// with primaries adjusted for `saturation` (1.0 = plain sRGB).
+pub fn build_profile(red: &[u16], green: &[u16], blue: &[u16], saturation: f64) -> Vec<u8> {
     let count = be32(SRGB, 128) as usize;
     let data_start = 132 + 12 * count;
 
@@ -34,6 +69,9 @@ pub fn build_profile(red: &[u16], green: &[u16], blue: &[u16]) -> Vec<u8> {
         out.extend(&SRGB[e + 8..e + 12]);
     }
     let mut data = SRGB[data_start..].to_vec();
+    if saturation != 1.0 {
+        scale_primaries(&mut data, data_start, saturation);
+    }
     data.resize((data.len() + 3) & !3, 0);
     let vcgt_off = data_start + 12 + data.len();
     out.extend(b"vcgt");
@@ -55,7 +93,7 @@ mod tests {
     #[test]
     fn test_profile_layout() {
         let lut: Vec<u16> = (0..256).map(|i| (i * 257) as u16).collect();
-        let p = build_profile(&lut, &lut, &lut);
+        let p = build_profile(&lut, &lut, &lut, 1.0);
         assert_eq!(be32(&p, 0) as usize, p.len());
         assert_eq!(&p[36..40], b"acsp");
         let n = be32(&p, 128) as usize;
@@ -77,5 +115,36 @@ mod tests {
             &p[vcgt + 18 + 2 * 255..vcgt + 18 + 2 * 256],
             &lut[255].to_be_bytes()
         );
+    }
+
+    #[test]
+    fn test_saturation_primaries() {
+        let lut = [0u16; 2];
+        let xyz = |p: &[u8], sig| {
+            let at = be32(
+                p,
+                132 + 12
+                    * (0..20)
+                        .find(|i| &p[132 + 12 * i..136 + 12 * i] == sig)
+                        .unwrap()
+                    + 4,
+            ) as usize;
+            [0, 1, 2].map(|k| be32(p, at + 8 + 4 * k) as i32)
+        };
+        let plain = build_profile(&lut, &lut, &lut, 1.0);
+        for s in [0.5, 1.5] {
+            let p = build_profile(&lut, &lut, &lut, s);
+            let sum = |p: &[u8]| -> [i32; 3] {
+                let c = [b"rXYZ", b"gXYZ", b"bXYZ"].map(|t| xyz(p, t));
+                std::array::from_fn(|k| c.iter().map(|v| v[k]).sum())
+            };
+            // White point preserved (±rounding), red primary moved.
+            let (a, b) = (sum(&plain), sum(&p));
+            assert!((0..3).all(|k| (a[k] - b[k]).abs() <= 2));
+            assert_ne!(xyz(&plain, b"rXYZ"), xyz(&p, b"rXYZ"));
+        }
+        // s>1 pulls red toward white: less X-dominant.
+        let r = xyz(&build_profile(&lut, &lut, &lut, 1.5), b"rXYZ");
+        assert!(r[0] < xyz(&plain, b"rXYZ")[0]);
     }
 }

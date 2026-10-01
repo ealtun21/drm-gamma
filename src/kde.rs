@@ -25,9 +25,9 @@ pub fn icc_dir() -> PathBuf {
         .join("icc")
 }
 
-/// kscreen-doctor with the session's Wayland socket, even from ssh/tty.
-fn kscreen_doctor() -> Command {
-    let mut cmd = Command::new("kscreen-doctor");
+/// `program` with the session's Wayland socket and D-Bus, even from ssh/tty.
+fn session_cmd(program: &str) -> Command {
+    let mut cmd = Command::new(program);
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", nix::unistd::getuid())));
@@ -42,8 +42,44 @@ fn kscreen_doctor() -> Command {
             cmd.env("WAYLAND_DISPLAY", s);
         }
     }
+    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+        cmd.env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            format!("unix:path={}/bus", runtime.display()),
+        );
+    }
     cmd.env("XDG_RUNTIME_DIR", runtime);
     cmd
+}
+
+fn kscreen_doctor() -> Command {
+    session_cmd("kscreen-doctor")
+}
+
+/// Turn KWin Night Light off so only drm-gamma's settings tint the screen
+/// (KWin computes its tint in the profile's primaries, so saturation would
+/// amplify it). Returns true if it was on.
+pub fn disable_night_light() -> bool {
+    let cfg = [
+        "--file",
+        "kwinrc",
+        "--group",
+        "NightColor",
+        "--key",
+        "Active",
+    ];
+    let on = session_cmd("kreadconfig6")
+        .args(cfg)
+        .output()
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "true");
+    if on {
+        // --notify makes KWin's config watcher reload it immediately.
+        let _ = session_cmd("kwriteconfig6")
+            .args(cfg)
+            .args(["--notify", "--type", "bool", "false"])
+            .status();
+    }
+    on
 }
 
 fn strip_ansi(s: &str) -> String {

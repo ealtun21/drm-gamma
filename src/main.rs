@@ -230,6 +230,9 @@ fn icc_cli(
     if !kwin {
         return ExitCode::SUCCESS;
     }
+    if kde::disable_night_light() {
+        info!("Turned off KWin Night Light (use -t for warmth instead)");
+    }
     match kde::apply(&path) {
         Ok(names) => {
             info!("Applied to {} via KWin", names.join(", "));

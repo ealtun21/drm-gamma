@@ -108,7 +108,8 @@ It writes `~/.local/share/icc/drm-gamma-t6500-br1.00-r0.80-g0.80-b0.90-s1.00-<ha
 points each output at it via `kscreen-doctor`, and deletes older
 `drm-gamma-*.icc` files. Each setting gets its own filename because KWin
 caches profiles by path. It works over ssh too; the session's Wayland socket
-is found automatically. No daemon needed: `sudo systemctl disable --now drm-gamma`.
+is found automatically. KWin Night Light is turned off on apply (it would be
+amplified by `-s`); use `-t` for warmth instead. No daemon needed: `sudo systemctl disable --now drm-gamma`.
 
 ### ICC profile only (GNOME, others)
 

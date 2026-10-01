@@ -5,6 +5,7 @@ mod daemon;
 mod device;
 mod drm;
 mod icc;
+mod kde;
 mod schedule;
 mod temperature;
 mod vt;
@@ -53,9 +54,9 @@ struct Args {
     #[arg(long)]
     bgamma: Option<f64>,
 
-    /// Write an sRGB ICC profile with these settings (vcgt) instead of touching
-    /// DRM. If DIR is a directory, the file is named after the settings and its
-    /// path printed. Load it in your compositor (KDE: kscreen-doctor)
+    /// Write an sRGB ICC profile (vcgt) instead of using DRM. A directory gets an
+    /// auto-named file; its path is printed. On KDE this happens automatically
+    /// (default ~/.local/share/icc) and the profile is applied to all outputs
     #[arg(long, value_name = "DIR|FILE")]
     icc: Option<String>,
 
@@ -108,7 +109,26 @@ fn main() -> ExitCode {
         };
     }
 
+    let kwin = kde::kwin_running();
+    if kwin && geteuid().is_root() && (args.reset || args.icc.is_none()) {
+        eprintln!("KWin owns the display and overwrites DRM gamma.");
+        eprintln!("Run without sudo: drm-gamma applies an ICC profile through KWin instead.");
+        return ExitCode::from(1);
+    }
+
     if args.reset {
+        if kwin {
+            return match kde::reset() {
+                Ok(names) => {
+                    info!("Reset {} to sRGB", names.join(", "));
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(1)
+                }
+            };
+        }
         info!("Resetting to default temperature (6500K)");
         return apply_temperature_cli(6500, 1.0, [1.0; 3], &args.device);
     }
@@ -138,29 +158,8 @@ fn main() -> ExitCode {
             eprintln!("Gamma must be between 0.1 and 10");
             return ExitCode::from(1);
         }
-        if let Some(path) = &args.icc {
-            // KWin caches profiles by path: name each setting uniquely so a
-            // new value is a new path. An explicit file path is used as-is.
-            let mut path = std::path::PathBuf::from(path);
-            if path.is_dir() {
-                path.push(format!(
-                    "drm-gamma-t{temp}-br{brightness:.2}-r{:.2}-g{:.2}-b{:.2}.icc",
-                    gamma[0], gamma[1], gamma[2]
-                ));
-            }
-            let path = path.display();
-            let (r, g, b) = temperature::generate_gamma_luts(256, temp, brightness, gamma);
-            return match std::fs::write(path.to_string(), icc::build_profile(&r, &g, &b)) {
-                Ok(()) => {
-                    // stdout = path only, for $(drm-gamma --icc DIR ...)
-                    println!("{path}");
-                    ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("Error writing {path}: {e}");
-                    ExitCode::from(1)
-                }
-            };
+        if kwin || args.icc.is_some() {
+            return icc_cli(args.icc.as_deref(), kwin, temp, brightness, gamma);
         }
         return apply_temperature_cli(temp, brightness, gamma, &args.device);
     }
@@ -168,6 +167,55 @@ fn main() -> ExitCode {
     let _ = Args::command().print_help();
     println!();
     ExitCode::SUCCESS
+}
+
+/// Write an ICC profile (auto-named when given a directory, default
+/// ~/.local/share/icc) and, under KWin, apply it to every enabled output.
+fn icc_cli(
+    target: Option<&str>,
+    kwin: bool,
+    temp: u32,
+    brightness: f64,
+    gamma: [f64; 3],
+) -> ExitCode {
+    let mut path = target.map_or_else(kde::icc_dir, std::path::PathBuf::from);
+    let auto = target.is_none() || path.is_dir();
+    if auto {
+        if let Err(e) = std::fs::create_dir_all(&path) {
+            eprintln!("Error creating {}: {e}", path.display());
+            return ExitCode::from(1);
+        }
+        // KWin caches profiles by path: each setting gets its own filename.
+        path.push(format!(
+            "drm-gamma-t{temp}-br{brightness:.2}-r{:.2}-g{:.2}-b{:.2}.icc",
+            gamma[0], gamma[1], gamma[2]
+        ));
+    }
+    let (r, g, b) = temperature::generate_gamma_luts(256, temp, brightness, gamma);
+    if let Err(e) = std::fs::write(&path, icc::build_profile(&r, &g, &b)) {
+        eprintln!("Error writing {}: {e}", path.display());
+        return ExitCode::from(1);
+    }
+    // stdout = path only, for $(drm-gamma --icc DIR ...)
+    println!("{}", path.display());
+    if !kwin {
+        return ExitCode::SUCCESS;
+    }
+    match kde::apply(&path) {
+        Ok(names) => {
+            info!("Applied to {} via KWin", names.join(", "));
+            if auto {
+                if let Some(dir) = path.parent() {
+                    kde::prune(dir, &path);
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("Error applying profile: {e}");
+            ExitCode::from(1)
+        }
+    }
 }
 
 fn init_logging(verbose: bool) {
